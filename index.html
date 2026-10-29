@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Dusk Delivery</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0d0b14; overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center; }
+  canvas { height: 100vh; max-width: 100vw; aspect-ratio: 9 / 16; display: block; touch-action: none; }
+  #styles { position: fixed; left: 12px; bottom: 12px; display: flex; gap: 6px; font: 12px ui-monospace, monospace; }
+  #styles button { background: #1c1828; color: #d8d2ea; border: 1px solid #3a3350; padding: 6px 10px; border-radius: 4px; cursor: pointer; }
+  #styles button.on { background: #ff4fa3; color: #fff; border-color: #ff4fa3; }
+  #styles button:disabled { opacity: .3; cursor: default; }
+  body.clean #styles { display: none; }
+</style>
+</head>
+<body>
+<canvas id="c" width="540" height="960"></canvas>
+<div id="styles"></div>
+<script>
+// Each style is a folder in assets/ with the same file names.
+// "blocks" has no files: it is the programmer-art version drawn in code.
+const STYLES = [
+  { id: "blocks", label: "0 blocks" },
+  { id: "pixel", label: "1 pixel", smooth: false },
+  { id: "footage", label: "2 found footage", smooth: true },
+  { id: "gouache", label: "3 gouache", smooth: true },
+];
+const FILES = ["run1", "run2", "boxes", "barrier", "envelope", "puddle", "ground"];
+// lane centres and road edges as a fraction of the ground tile width
+const LANES = [0.298, 0.426, 0.568, 0.697];
+const LANE_W = 0.14;
+
+const params = new URLSearchParams(location.search);
+const AUTO = params.has("auto");
+if (params.has("clean")) document.body.classList.add("clean");
+
+const cv = document.getElementById("c");
+const ctx = cv.getContext("2d");
+const W = cv.width, H = cv.height;
+
+const art = {};
+function loadStyle(s) {
+  if (s.id === "blocks") { s.ready = true; return Promise.resolve(); }
+  art[s.id] = {};
+  return Promise.all(FILES.map(f => new Promise(res => {
+    const img = new Image();
+    img.onload = () => { art[s.id][f] = img; res(true); };
+    img.onerror = () => res(false);
+    img.src = `assets/${s.id}/${f}.${f === "ground" ? "jpg" : "png"}`;
+  }))).then(ok => { s.ready = ok.every(Boolean); });
+}
+
+let style = STYLES.find(s => s.id === params.get("style")) || STYLES[0];
+let flash = 0;
+function setStyle(s) {
+  if (!s.ready || s === style) return;
+  style = s;
+  flash = 1;
+  renderButtons();
+}
+
+const bar = document.getElementById("styles");
+function renderButtons() {
+  bar.innerHTML = "";
+  for (const s of STYLES) {
+    const b = document.createElement("button");
+    b.textContent = s.label;
+    b.disabled = !s.ready;
+    if (s === style) b.className = "on";
+    b.onclick = () => setStyle(s);
+    bar.appendChild(b);
+  }
+}
+
+// ---- game state ----
+const PLAYER_Y = H * 0.8;
+const PLAYER_H = 150;
+let game;
+function reset() {
+  game = {
+    state: AUTO ? "play" : "title",
+    lane: 1, x: laneX(1), speed: 320, scroll: 0, dist: 0,
+    things: [], nextRow: -200, score: 0, t: 0, hitT: 0, pops: [],
+  };
+}
+function laneX(i) { return LANES[i] * W; }
+
+const KINDS = {
+  boxes:    { w: 1.15, bad: true },
+  barrier:  { w: 1.2, bad: true },
+  puddle:   { w: 1.1, bad: true, flat: true },
+  envelope: { w: 0.62, bad: false },
+};
+
+function spawnRow(y) {
+  const lanes = [0, 1, 2, 3].sort(() => Math.random() - 0.5);
+  const blocked = Math.random() < 0.35 ? 2 : 1;
+  for (let i = 0; i < blocked; i++) {
+    const kind = ["boxes", "barrier", "puddle"][Math.floor(Math.random() * 3)];
+    game.things.push({ kind, lane: lanes[i], y });
+  }
+  if (Math.random() < 0.7) {
+    const lane = lanes[blocked];
+    for (let k = 0; k < 3; k++) game.things.push({ kind: "envelope", lane, y: y - 80 - k * 70 });
+  }
+}
+
+function move(d) {
+  if (game.state === "title") { game.state = "play"; return; }
+  if (game.state === "over") { reset(); game.state = "play"; return; }
+  game.lane = Math.max(0, Math.min(3, game.lane + d));
+}
+
+addEventListener("keydown", e => {
+  if (e.key === "ArrowLeft" || e.key === "a") move(-1);
+  else if (e.key === "ArrowRight" || e.key === "d") move(1);
+  else if (e.key === " " || e.key === "Enter") move(0);
+  else if (/^[0-9]$/.test(e.key) && STYLES[+e.key]) setStyle(STYLES[+e.key]);
+});
+let touchX = null;
+cv.addEventListener("pointerdown", e => { touchX = e.clientX; });
+cv.addEventListener("pointerup", e => {
+  if (touchX === null) return;
+  const dx = e.clientX - touchX;
+  const r = cv.getBoundingClientRect();
+  if (Math.abs(dx) > 30) move(Math.sign(dx));
+  else move(e.clientX < r.left + r.width / 2 ? -1 : 1);
+  touchX = null;
+});
+
+function autopilot() {
+  const ahead = l => game.things.filter(t => t.lane === l && t.y < PLAYER_Y && t.y > PLAYER_Y - 340);
+  const danger = l => ahead(l).some(t => KINDS[t.kind].bad);
+  const loot = l => ahead(l).filter(t => !KINDS[t.kind].bad).length;
+  if (Math.abs(game.x - laneX(game.lane)) > 4) return;
+  const options = [game.lane - 1, game.lane, game.lane + 1].filter(l => l >= 0 && l <= 3 && !danger(l));
+  if (!options.length) return;
+  options.sort((a, b) => loot(b) - loot(a) || (a === game.lane ? -1 : b === game.lane ? 1 : 0));
+  game.lane = options[0];
+}
+
+function update(dt) {
+  game.t += dt;
+  flash = Math.max(0, flash - dt * 3);
+  if (game.state !== "play") return;
+  if (AUTO) autopilot();
+  game.speed = Math.min(620, 320 + game.dist / 60);
+  const dy = game.speed * dt;
+  game.scroll += dy;
+  game.dist += dy;
+  game.x += (laneX(game.lane) - game.x) * Math.min(1, dt * 14);
+  for (const t of game.things) t.y += dy;
+  game.nextRow += dy;
+  while (game.nextRow > 0) { spawnRow(-120 - game.nextRow); game.nextRow -= 330; }
+  for (const t of game.things) {
+    if (t.done || t.lane !== game.lane || Math.abs(game.x - laneX(game.lane)) > 30) continue;
+    if (Math.abs(t.y - (PLAYER_Y - 30)) < 50) {
+      t.done = true;
+      if (KINDS[t.kind].bad) { game.state = "over"; game.hitT = game.t; if (AUTO) setTimeout(reset, 900); }
+      else { game.score++; game.pops.push({ x: game.x, y: t.y, t: game.t }); }
+    }
+  }
+  game.things = game.things.filter(t => t.y < H + 200 && !(t.done && !KINDS[t.kind].bad));
+  game.pops = game.pops.filter(p => game.t - p.t < 0.5);
+}
+
+// ---- drawing ----
+function drawGround() {
+  if (style.id === "blocks") {
+    ctx.fillStyle = "#2b2b2b"; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = "#444"; ctx.fillRect(0, 0, W * 0.23, H); ctx.fillRect(W * 0.77, 0, W * 0.23, H);
+    ctx.fillStyle = "#3a3a3a"; ctx.fillRect(W * 0.23, 0, W * 0.54, H);
+    ctx.strokeStyle = "#888"; ctx.setLineDash([24, 36]); ctx.lineWidth = 3;
+    ctx.lineDashOffset = -game.scroll % 60;
+    for (const f of [0.362, 0.497, 0.633]) { ctx.beginPath(); ctx.moveTo(f * W, 0); ctx.lineTo(f * W, H); ctx.stroke(); }
+    ctx.setLineDash([]);
+    return;
+  }
+  const g = art[style.id].ground;
+  const th = W * g.height / g.width;
+  const off = game.scroll % (th * 2);
+  // alternate flipped copies so the tile edges always meet themselves
+  for (let k = -2; k < Math.ceil(H / th) + 1; k++) {
+    const y = k * th + off;
+    const n = ((k % 2) + 2) % 2;
+    if (y > H || y + th < 0) continue;
+    if (n === 0) ctx.drawImage(g, 0, y, W, th);
+    else { ctx.save(); ctx.translate(0, y + th); ctx.scale(1, -1); ctx.drawImage(g, 0, 0, W, th); ctx.restore(); }
+  }
+}
+
+const BLOCK = {
+  boxes: ["#b07a3c", "boxes"], barrier: ["#d24a3a", "barrier"], puddle: ["#3c62b0", "puddle"],
+  envelope: ["#f2d34f", "env"], player: ["#e8e8e8", "player"],
+};
+function drawBlock(kind, cx, cy, w, h) {
+  const [col, label] = BLOCK[kind];
+  ctx.fillStyle = col; ctx.fillRect(cx - w / 2, cy - h, w, h);
+  ctx.strokeStyle = "#000"; ctx.lineWidth = 2; ctx.strokeRect(cx - w / 2, cy - h, w, h);
+  ctx.fillStyle = "#000"; ctx.font = "12px ui-monospace, monospace"; ctx.textAlign = "center";
+  ctx.fillText(label, cx, cy - h / 2 + 4);
+}
+
+function drawSprite(name, cx, cy, w) {
+  if (style.id === "blocks") {
+    const h = name === "puddle" ? w * 0.4 : name === "envelope" ? w * 0.7 : name.startsWith("run") ? PLAYER_H : w * 0.9;
+    drawBlock(name.startsWith("run") ? "player" : name, cx, cy, w, h);
+    return;
+  }
+  const img = art[style.id][name];
+  const h = w * img.height / img.width;
+  ctx.drawImage(img, cx - w / 2, cy - h, w, h);
+}
+
+function drawPlayer() {
+  const frame = Math.floor(game.t * 9) % 2 ? "run2" : "run1";
+  const bob = game.state === "play" ? Math.abs(Math.sin(game.t * 18)) * 5 : 0;
+  const lean = (laneX(game.lane) - game.x) * 0.004;
+  ctx.save();
+  ctx.translate(game.x, PLAYER_Y - bob);
+  ctx.rotate(lean);
+  if (style.id === "blocks") drawBlock("player", 0, 0, 56, PLAYER_H);
+  else {
+    const img = art[style.id][frame];
+    const w = PLAYER_H * img.width / img.height;
+    ctx.drawImage(img, -w / 2, -PLAYER_H, w, PLAYER_H);
+  }
+  ctx.restore();
+}
+
+function hud() {
+  ctx.textAlign = "left";
+  ctx.font = "bold 22px ui-monospace, monospace";
+  ctx.fillStyle = "rgba(0,0,0,.45)"; ctx.fillRect(14, 14, 190, 64);
+  ctx.fillStyle = "#fff";
+  ctx.fillText(`✉ ${game.score}`, 26, 42);
+  ctx.font = "14px ui-monospace, monospace";
+  ctx.fillText(`${Math.floor(game.dist / 40)} m`, 26, 66);
+}
+
+function centerText(lines) {
+  ctx.fillStyle = "rgba(10,8,20,.6)"; ctx.fillRect(0, H * 0.32, W, 200);
+  ctx.textAlign = "center"; ctx.fillStyle = "#fff";
+  lines.forEach(([txt, size], i) => {
+    ctx.font = `bold ${size}px ui-monospace, monospace`;
+    ctx.fillText(txt, W / 2, H * 0.32 + 70 + i * 52);
+  });
+}
+
+function draw() {
+  ctx.imageSmoothingEnabled = style.smooth !== false;
+  drawGround();
+  const lw = LANE_W * W;
+  const sorted = [...game.things].sort((a, b) => a.y - b.y);
+  for (const t of sorted) if (KINDS[t.kind].flat) drawSprite(t.kind, laneX(t.lane), t.y, lw * KINDS[t.kind].w);
+  for (const t of sorted) if (!KINDS[t.kind].flat) {
+    const float = t.kind === "envelope" ? Math.sin(game.t * 5 + t.y * 0.05) * 5 : 0;
+    drawSprite(t.kind, laneX(t.lane), t.y + float, lw * KINDS[t.kind].w);
+  }
+  drawPlayer();
+  for (const p of game.pops) {
+    const k = (game.t - p.t) / 0.5;
+    ctx.globalAlpha = 1 - k; ctx.fillStyle = "#ffe46b"; ctx.font = "bold 20px ui-monospace, monospace";
+    ctx.textAlign = "center"; ctx.fillText("+1", p.x, PLAYER_Y - PLAYER_H - k * 40);
+    ctx.globalAlpha = 1;
+  }
+  if (!params.has("clean")) hud();
+  if (game.state === "title") centerText([["DUSK DELIVERY", 40], ["← →  or swipe", 18]]);
+  if (game.state === "over" && !AUTO) centerText([["DELIVERY FAILED", 34], [`✉ ${game.score}  ·  tap to retry`, 18]]);
+  if (game.state === "over" && game.t - game.hitT < 0.15) { ctx.fillStyle = "rgba(255,60,60,.35)"; ctx.fillRect(0, 0, W, H); }
+  if (flash > 0) { ctx.fillStyle = `rgba(255,255,255,${flash * 0.8})`; ctx.fillRect(0, 0, W, H); }
+}
+
+let last = performance.now();
+function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  update(dt);
+  draw();
+  requestAnimationFrame(loop);
+}
+
+reset();
+Promise.all(STYLES.map(loadStyle)).then(() => {
+  if (!style.ready) style = STYLES[0];
+  renderButtons();
+  requestAnimationFrame(loop);
+});
+</script>
+</body>
+</html>
