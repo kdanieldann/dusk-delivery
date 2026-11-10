@@ -31,8 +31,8 @@ Each style is a folder in `assets/` with the same file names, so adding a fifth 
 ## How it was made
 
 - Game code: written with Claude Code, one HTML file, no build step.
-- Art: generated in [Lovart](https://www.lovart.ai) with GPT Image Flare. The pixel set was made first; the other two styles used it as a reference so items and lanes line up.
-- `tools/extract.py` cuts sprites out of each generated sheet (magenta key), shrinks them to web sizes and exports the ground tile.
+- Art: generated with [genmedia](https://genmedia.sh) on fal, six Nano Banana 2 calls. The pixel set came first from text prompts; found footage and gouache restyle it with the edit endpoint, so items and lanes line up. Commands, prompts and timings are in [`genmedia-log.md`](genmedia-log.md).
+- `tools/extract.py` cuts sprites out of each generated sheet (magenta key), shrinks them to web sizes and exports the ground tile. Styles whose ground tile has a different lane layout set their own `lanes` in `STYLES`.
 
 ## Run locally
 

@@ -21,11 +21,12 @@
 <script>
 // Each style is a folder in assets/ with the same file names.
 // "blocks" has no files: it is the programmer-art version drawn in code.
+// A style whose ground tile has its own lane layout sets lanes and laneW.
 const STYLES = [
   { id: "blocks", label: "0 blocks" },
-  { id: "pixel", label: "1 pixel", smooth: false },
-  { id: "footage", label: "2 found footage", smooth: true },
-  { id: "gouache", label: "3 gouache", smooth: true },
+  { id: "pixel", label: "1 pixel", smooth: false, lanes: [0.262, 0.421, 0.579, 0.737], laneW: 0.158 },
+  { id: "footage", label: "2 found footage", smooth: true, lanes: [0.263, 0.428, 0.593, 0.758], laneW: 0.165 },
+  { id: "gouache", label: "3 gouache", smooth: true, lanes: [0.263, 0.428, 0.593, 0.758], laneW: 0.165 },
 ];
 const FILES = ["run1", "run2", "boxes", "barrier", "envelope", "puddle", "ground"];
 // lane centres and road edges as a fraction of the ground tile width
@@ -85,7 +86,7 @@ function reset() {
     things: [], nextRow: -200, score: 0, t: 0, hitT: 0, pops: [],
   };
 }
-function laneX(i) { return LANES[i] * W; }
+function laneX(i) { return (style.lanes || LANES)[i] * W; }
 
 const KINDS = {
   boxes:    { w: 1.15, bad: true },
@@ -252,7 +253,7 @@ function centerText(lines) {
 function draw() {
   ctx.imageSmoothingEnabled = style.smooth !== false;
   drawGround();
-  const lw = LANE_W * W;
+  const lw = (style.laneW || LANE_W) * W;
   const sorted = [...game.things].sort((a, b) => a.y - b.y);
   for (const t of sorted) if (KINDS[t.kind].flat) drawSprite(t.kind, laneX(t.lane), t.y, lw * KINDS[t.kind].w);
   for (const t of sorted) if (!KINDS[t.kind].flat) {

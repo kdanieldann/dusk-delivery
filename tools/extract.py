@@ -56,7 +56,9 @@ def main(raw_dir, out_dir):
             continue
         cy = (sl[0].start + sl[0].stop) / 2
         cx = (sl[1].start + sl[1].stop) / 2
-        items.append((cy, cx, i, sl))
+        items.append((area, cy, cx, i, sl))
+    # some models print item labels under the art; keep the six largest shapes
+    items = [t[1:] for t in sorted(items, reverse=True)[:len(NAMES)]]
     h = rgb.shape[0]
     items.sort(key=lambda t: (round(t[0] / (h / 4)), t[1]))
     if len(items) != len(NAMES):
